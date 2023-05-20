@@ -1,4 +1,3 @@
-mod cargo;
 mod commands;
 
 fn main() -> anyhow::Result<()> {
