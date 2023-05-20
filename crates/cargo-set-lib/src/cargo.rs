@@ -69,7 +69,10 @@ impl<F: FileSystem> CargoManifestService<F> {
                 let manifest = self.load_cargo(&member_path)?;
                 members.insert(member_path, manifest);
             }
-            s.members = Some(members);
+
+            if members.len() > 0 {
+                s.members = Some(members);
+            }
         }
 
         Ok(s)
@@ -102,6 +105,23 @@ mod test {
 
         assert_eq!(1, members.len());
         assert!(members.contains_key(&child_manifest_path));
+
+        Ok(())
+    }
+
+    #[test]
+    fn can_no_children() -> anyhow::Result<()> {
+        let root_manifest_toml = b"name = 'root'\nversion = '0.1.0'\n workspace = { members = [] }";
+
+        let root_manifest_path = PathBuf::from("Cargo.toml");
+
+        let mut fs = MockFileSystem::new();
+        fs.add_file(root_manifest_path.clone(), root_manifest_toml.to_vec());
+
+        let cargo_manifest = CargoManifestService::new(fs)
+            .load_manifest(&root_manifest_path)
+            .unwrap();
+        assert!(cargo_manifest.members.is_none());
 
         Ok(())
     }

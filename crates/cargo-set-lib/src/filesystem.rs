@@ -9,15 +9,18 @@ pub trait FileSystem {
 pub struct RealFileSystem;
 
 impl FileSystem for RealFileSystem {
+    #[inline(always)]
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         std::fs::read(path)
     }
 }
 
+#[allow(dead_code)]
 pub struct MockFileSystem {
     files: HashMap<PathBuf, Vec<u8>>,
 }
 
+#[allow(dead_code)]
 impl MockFileSystem {
     pub fn new() -> Self {
         Self {
