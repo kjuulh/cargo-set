@@ -98,7 +98,9 @@ impl<F: FileSystem> CargoManifestService<F> {
         }
         self.fs.write(
             &s.root_path,
-            toml::to_string(&s.root_manifest)?.as_bytes().to_vec(),
+            toml::to_string_pretty(&s.root_manifest)?
+                .as_bytes()
+                .to_vec(),
         )?;
 
         // If there are workspace members, update version in each of them
