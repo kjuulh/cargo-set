@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use cargo_toml::Manifest;
+use cargo_toml::{Dependency, Manifest};
 
 use crate::filesystem::FileSystem;
 
@@ -34,12 +34,7 @@ impl<F: FileSystem> CargoManifestService<F> {
 
     pub fn load_manifest(&self, path: &PathBuf) -> anyhow::Result<CargoManifest> {
         let manifest = self.load_cargo(path)?;
-        let mut s = CargoManifest::new(
-            path.parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or(PathBuf::from("/")),
-            manifest,
-        );
+        let mut s = CargoManifest::new(path.clone(), manifest);
 
         let s = self.load_children(&mut s)?;
 
@@ -62,7 +57,7 @@ impl<F: FileSystem> CargoManifestService<F> {
             let mut members = BTreeMap::new();
 
             for member in &workspace.members {
-                let mut member_path = s.root_path.clone();
+                let mut member_path = s.root_path.parent().unwrap().to_path_buf();
                 member_path.push(member);
                 member_path.push("Cargo.toml");
 
@@ -77,10 +72,69 @@ impl<F: FileSystem> CargoManifestService<F> {
 
         Ok(s)
     }
+
+    fn update_version<'s>(
+        &self,
+        s: &'s mut CargoManifest,
+        version: impl Into<String>,
+    ) -> anyhow::Result<&'s mut CargoManifest> {
+        let version = version.into();
+
+        // Update version in root manifest
+        s.root_manifest
+            .package
+            .as_mut()
+            .map(|p| p.version.set(version.clone()));
+        self.update_dependencies(&mut s.root_manifest.dependencies, &version);
+        if let Some(workspace) = s.root_manifest.workspace.as_mut() {
+            self.update_dependencies(&mut workspace.dependencies, &version);
+        }
+        self.fs.write(
+            &s.root_path,
+            toml::to_string_pretty(&s.root_manifest)?
+                .as_bytes()
+                .to_vec(),
+        )?;
+
+        // If there are workspace members, update version in each of them
+        if let Some(members) = &mut s.members {
+            for (path, manifest) in members.iter_mut() {
+                let member_path = path;
+
+                manifest
+                    .package
+                    .as_mut()
+                    .map(|p| p.version.set(version.clone()));
+                self.update_dependencies(&mut manifest.dependencies, &version);
+                self.fs.write(
+                    &member_path,
+                    toml::to_string_pretty(&manifest)?.as_bytes().to_vec(),
+                )?;
+            }
+        }
+
+        Ok(s)
+    }
+
+    fn update_dependencies(
+        &self,
+        dependencies: &mut BTreeMap<String, Dependency>,
+        version: &String,
+    ) {
+        for (_name, dep_version) in dependencies.iter_mut() {
+            match dep_version {
+                Dependency::Simple(dep) => *dep = version.clone(),
+                Dependency::Inherited(_) => {}
+                Dependency::Detailed(dep) => dep.version = Some(version.clone()),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
+    use std::assert_eq;
+
     use crate::filesystem::MockFileSystem;
 
     use super::*;
@@ -122,6 +176,67 @@ mod test {
             .load_manifest(&root_manifest_path)
             .unwrap();
         assert!(cargo_manifest.members.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn can_update_version() -> anyhow::Result<()> {
+        let root_manifest_toml = r#"
+            name = 'root'
+            version = '0.1.0'
+            [workspace] 
+            members = ['child']
+
+            [workspace.dependencies]
+            child = { path = "child", version = "0.2.0"}
+
+            [dependencies]
+            child.workspace = true
+            "#;
+        let child_manifest_toml = b"name = 'child'\nversion = '0.2.0'";
+
+        let root_manifest_path = PathBuf::from("Cargo.toml");
+        let child_manifest_path = PathBuf::from("child/Cargo.toml");
+
+        let mut fs = MockFileSystem::new();
+        fs.add_file(
+            root_manifest_path.clone(),
+            root_manifest_toml.as_bytes().to_vec(),
+        );
+        fs.add_file(child_manifest_path.clone(), child_manifest_toml.to_vec());
+
+        let cargo_manifest_service = CargoManifestService::new(fs);
+
+        let mut cargo_manifest = cargo_manifest_service
+            .load_manifest(&root_manifest_path)
+            .unwrap();
+
+        cargo_manifest_service.update_version(&mut cargo_manifest, "0.3.0")?;
+
+        match cargo_manifest
+            .root_manifest
+            .workspace
+            .unwrap()
+            .dependencies
+            .get("child")
+            .unwrap()
+        {
+            cargo_toml::Dependency::Simple(_) => todo!(),
+            cargo_toml::Dependency::Inherited(_) => todo!(),
+            cargo_toml::Dependency::Detailed(d) => assert_eq!(d.version.as_ref().unwrap(), "0.3.0"),
+        }
+
+        assert_eq!(
+            cargo_manifest
+                .members
+                .unwrap()
+                .get(&PathBuf::from("child/Cargo.toml"))
+                .unwrap()
+                .package()
+                .version(),
+            "0.3.0"
+        );
 
         Ok(())
     }
