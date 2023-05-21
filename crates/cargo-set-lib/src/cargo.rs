@@ -76,18 +76,20 @@ impl<F: FileSystem> CargoManifestService<F> {
     fn update_version<'s>(
         &self,
         s: &'s mut CargoManifest,
+        package: impl Into<String>,
         version: impl Into<String>,
     ) -> anyhow::Result<&'s mut CargoManifest> {
         let version = version.into();
+        let package = package.into();
 
         // Update version in root manifest
         s.root_manifest
             .package
             .as_mut()
             .map(|p| p.version.set(version.clone()));
-        self.update_dependencies(&mut s.root_manifest.dependencies, &version);
+        self.update_dependencies(&mut s.root_manifest.dependencies, &package, &version);
         if let Some(workspace) = s.root_manifest.workspace.as_mut() {
-            self.update_dependencies(&mut workspace.dependencies, &version);
+            self.update_dependencies(&mut workspace.dependencies, &package, &version);
         }
         self.fs.write(
             &s.root_path,
@@ -105,7 +107,7 @@ impl<F: FileSystem> CargoManifestService<F> {
                     .package
                     .as_mut()
                     .map(|p| p.version.set(version.clone()));
-                self.update_dependencies(&mut manifest.dependencies, &version);
+                self.update_dependencies(&mut manifest.dependencies, &package, &version);
                 self.fs.write(
                     &member_path,
                     toml::to_string_pretty(&manifest)?.as_bytes().to_vec(),
@@ -119,9 +121,13 @@ impl<F: FileSystem> CargoManifestService<F> {
     fn update_dependencies(
         &self,
         dependencies: &mut BTreeMap<String, Dependency>,
+        package: &String,
         version: &String,
     ) {
-        for (_name, dep_version) in dependencies.iter_mut() {
+        for (_name, dep_version) in dependencies
+            .iter_mut()
+            .filter(|(name, _)| name.eq(&package))
+        {
             match dep_version {
                 Dependency::Simple(dep) => *dep = version.clone(),
                 Dependency::Inherited(_) => {}
