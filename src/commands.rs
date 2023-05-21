@@ -1,10 +1,12 @@
 use std::env::Args;
 use std::path::PathBuf;
 
+use cargo_set_lib::{CargoManifestService, RealFileSystem};
 use clap::{Parser, Subcommand, ValueEnum};
 
 pub fn cli_execute(args: Args) -> anyhow::Result<()> {
     let cli = Cli::parse_from(args);
+    let cargo_manifest_service = CargoManifestService::new(RealFileSystem);
 
     match &cli.log_level {
         Some(level) => {
@@ -22,7 +24,7 @@ pub fn cli_execute(args: Args) -> anyhow::Result<()> {
             _crate,
             path,
             set_version,
-            ..
+            bump,
         }) => {
             tracing::trace!(
                 workspace = workspace,
@@ -30,7 +32,15 @@ pub fn cli_execute(args: Args) -> anyhow::Result<()> {
                 path = path.as_ref().unwrap().display().to_string(),
                 set_version = set_version.as_ref(),
                 "command - set"
-            )
+            );
+
+            let mut manifest = cargo_manifest_service.load_manifest(path.as_ref().unwrap())?;
+
+            if let Some(set_version) = set_version {
+                cargo_manifest_service.update_version(&mut manifest, _crate, set_version)?;
+            } else if let Some(_bump_level) = bump {
+                todo!("haven't implemented bump yet")
+            }
         }
         None => {}
     }
@@ -82,7 +92,7 @@ pub enum Commands {
         workspace: bool,
 
         #[arg(long, name = "crate")]
-        _crate: Option<String>,
+        _crate: String,
 
         #[arg(long, default_value = "Cargo.toml")]
         path: Option<PathBuf>,

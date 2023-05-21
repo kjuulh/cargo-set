@@ -20,6 +20,8 @@ edition = "2021"
 clap = { version = "4.3.0", features = ["derive"] }
 tracing-subscriber = "0.3.17"
 
+cargo-set-lib = { path = "crates/cargo-set-lib" }
+
 anyhow.workspace = true
 cargo_toml.workspace = true
 tracing.workspace = true
