@@ -83,11 +83,16 @@ impl<F: FileSystem> CargoManifestService<F> {
         let package = package.into();
 
         // Update version in root manifest
-        s.root_manifest
-            .package
-            .as_mut()
-            .map(|p| p.version.set(version.clone()));
-        self.update_dependencies(&mut s.root_manifest.dependencies, &package, &version);
+        if let Some(pkg) = &s.root_manifest.package {
+            if pkg.name == package {
+                s.root_manifest
+                    .package
+                    .as_mut()
+                    .map(|p| p.version.set(version.clone()));
+            }
+        } else {
+            self.update_dependencies(&mut s.root_manifest.dependencies, &package, &version);
+        }
         if let Some(workspace) = s.root_manifest.workspace.as_mut() {
             self.update_dependencies(&mut workspace.dependencies, &package, &version);
         }
@@ -103,15 +108,20 @@ impl<F: FileSystem> CargoManifestService<F> {
             for (path, manifest) in members.iter_mut() {
                 let member_path = path;
 
-                manifest
-                    .package
-                    .as_mut()
-                    .map(|p| p.version.set(version.clone()));
-                self.update_dependencies(&mut manifest.dependencies, &package, &version);
-                self.fs.write(
-                    &member_path,
-                    toml::to_string_pretty(&manifest)?.as_bytes().to_vec(),
-                )?;
+                if let Some(pkg) = &manifest.package {
+                    if pkg.name == package {
+                        manifest
+                            .package
+                            .as_mut()
+                            .map(|p| p.version.set(version.clone()));
+                    }
+                } else {
+                    self.update_dependencies(&mut manifest.dependencies, &package, &version);
+                    self.fs.write(
+                        &member_path,
+                        toml::to_string_pretty(&manifest)?.as_bytes().to_vec(),
+                    )?;
+                }
             }
         }
 
@@ -189,21 +199,27 @@ mod test {
     #[test]
     fn can_update_version() -> anyhow::Result<()> {
         let root_manifest_toml = r#"
-            name = 'root'
-            version = '0.1.0'
             [workspace] 
-            members = ['child']
+            members = ['child', "other"]
 
             [workspace.dependencies]
             child = { path = "child", version = "0.2.0"}
+            other = { path = "child", version = "0.2.0"}
+
+
+            [package]
+            name = 'root'
+            version = '0.1.0'
 
             [dependencies]
             child.workspace = true
             "#;
         let child_manifest_toml = b"name = 'child'\nversion = '0.2.0'";
+        let other_child_manifest_toml = b"name = 'other'\nversion = '0.1.0'";
 
         let root_manifest_path = PathBuf::from("Cargo.toml");
         let child_manifest_path = PathBuf::from("child/Cargo.toml");
+        let other_child_manifest_path = PathBuf::from("other/Cargo.toml");
 
         let mut fs = MockFileSystem::new();
         fs.add_file(
@@ -211,6 +227,10 @@ mod test {
             root_manifest_toml.as_bytes().to_vec(),
         );
         fs.add_file(child_manifest_path.clone(), child_manifest_toml.to_vec());
+        fs.add_file(
+            other_child_manifest_path.clone(),
+            other_child_manifest_toml.to_vec(),
+        );
 
         let cargo_manifest_service = CargoManifestService::new(fs);
 
@@ -218,7 +238,7 @@ mod test {
             .load_manifest(&root_manifest_path)
             .unwrap();
 
-        cargo_manifest_service.update_version(&mut cargo_manifest, "0.3.0")?;
+        cargo_manifest_service.update_version(&mut cargo_manifest, "child", "0.3.0")?;
 
         match cargo_manifest
             .root_manifest
@@ -234,14 +254,32 @@ mod test {
         }
 
         assert_eq!(
+            cargo_manifest.root_manifest.package.unwrap().version(),
+            "0.1.0"
+        );
+
+        assert_eq!(
             cargo_manifest
                 .members
+                .as_ref()
                 .unwrap()
                 .get(&PathBuf::from("child/Cargo.toml"))
                 .unwrap()
                 .package()
                 .version(),
             "0.3.0"
+        );
+
+        assert_eq!(
+            cargo_manifest
+                .members
+                .as_ref()
+                .unwrap()
+                .get(&PathBuf::from("other/Cargo.toml"))
+                .unwrap()
+                .package()
+                .version(),
+            "0.1.0"
         );
 
         Ok(())
